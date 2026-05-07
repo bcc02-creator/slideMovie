@@ -3,6 +3,9 @@
 // ===========================================================
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { SlidecastAudio, SlidecastRecorder } from './audio.js';
+import { SlidecastTTS } from './tts.js';
+import { SlidecastFFmpeg } from './ffmpeg.js';
 
 // ----- Color tokens -----
 const SC_COLORS = {
