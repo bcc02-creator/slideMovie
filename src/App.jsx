@@ -2,17 +2,7 @@
 // Slidecast — main React app
 // ===========================================================
 
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { SlidecastAudio, SlidecastRecorder } from './audio.js';
-import { SlidecastTTS } from './tts.js';
-import { SlidecastFFmpeg } from './ffmpeg.js';
-import { SlidecastRenderer } from './renderer.js';
-import { SlidecastDB } from './db.js';
-import { buildSnapshot, rehydrateProject } from './persist.js';
-import {
-  renderPdfToFrames, imageFilesToUrls, htmlFileToUrl, audioFilesToList,
-  parseTranscriptFile, chunkLine, fmtTime, fmtBytes,
-} from './parsers.js';
+const { useState, useEffect, useRef, useCallback, useMemo } = React;
 
 // ----- Color tokens -----
 const SC_COLORS = {
@@ -171,6 +161,8 @@ function App() {
   const [voMode, setVoMode] = useState('upload');     // 'upload' | 'tts'
   const [voFiles, setVoFiles] = useState([]);         // [{name,url,file}]
   const [bgmFile, setBgmFile] = useState(null);
+  const [bgmPreviewing, setBgmPreviewing] = useState(false);
+  const [voLoadedTick, setVoLoadedTick] = useState(0);
   const [transcript, setTranscript] = useState(null); // parsed result
   const [transcriptName, setTranscriptName] = useState('');
 
@@ -181,7 +173,7 @@ function App() {
   const [ttsPitch, setTtsPitch] = useState(1.0);
   const ttsRef = useRef(null);
   const ttsCtrlRef = useRef(null);
-  if (!ttsRef.current && typeof SlidecastTTS !== 'undefined') {
+  if (!ttsRef.current && typeof window.SlidecastTTS !== 'undefined') {
     ttsRef.current = new SlidecastTTS();
   }
 
@@ -313,6 +305,7 @@ function App() {
     try {
       const r = await audioRef.current.loadVoiceover(list);
       setTotalDuration(r.totalDuration);
+      setVoLoadedTick(t => t + 1);
       toast.push(`已載入 ${list.length} 段配音 / ${fmtTime(r.totalDuration)}`, 'ok');
     } catch (e) {
       toast.push('配音解碼失敗：' + e.message, 'err');
@@ -324,6 +317,17 @@ function App() {
     setBgmFile(f);
     try { await audioRef.current.loadBGM(f); toast.push('背景音樂已載入', 'ok'); }
     catch (e) { toast.push('BGM 失敗：' + e.message, 'err'); }
+  };
+
+  const toggleBgmPreview = () => {
+    if (!bgmFile) { toast.push('請先上傳背景音樂', 'warn'); return; }
+    if (bgmPreviewing) {
+      audioRef.current.stopBgmOnly();
+      setBgmPreviewing(false);
+    } else {
+      audioRef.current.playBgmOnly();
+      setBgmPreviewing(true);
+    }
   };
 
   const onTranscript = async (files) => {
@@ -377,7 +381,7 @@ function App() {
       }
     }
     setSegments(segs);
-  }, [voMode, voFiles, transcript, ttsRate, ttsVoiceURI]);
+  }, [voMode, voFiles, voLoadedTick, transcript, ttsRate, ttsVoiceURI]);
 
   // ---- Also assign slide mapping ----
   // If transcript is per-slide and slides count > seg count, extend segments
@@ -481,8 +485,11 @@ function App() {
   // ---- Controls ----
   const handlePlay = () => {
     if (!segments.length) { toast.push('需要至少一段配音', 'warn'); return; }
+    // Stop standalone BGM preview if running — playback flows manage BGM themselves
+    if (bgmPreviewing) { audioRef.current.stopBgmOnly(); setBgmPreviewing(false); }
     if (voMode === 'tts') {
-      // Live TTS playback
+      // Live TTS playback — BGM runs in parallel since play() isn't called
+      if (bgmFile) audioRef.current.playBgmOnly();
       const lines = segments.map(s => s.text || '');
       // Cancel any prior playback
       ttsCtrlRef.current?.cancel();
@@ -522,6 +529,7 @@ function App() {
         onAllDone: () => {
           setPlaying(false);
           ttsCtrlRef.current = null;
+          audioRef.current.stopBgmOnly();
         },
       });
       setPlaying(true);
@@ -534,6 +542,7 @@ function App() {
     if (voMode === 'tts') {
       ttsCtrlRef.current?.cancel();
       ttsCtrlRef.current = null;
+      audioRef.current.stopBgmOnly();
       setPlaying(false);
       return;
     }
@@ -547,6 +556,7 @@ function App() {
     } else {
       audioRef.current.stop();
     }
+    audioRef.current.stopBgmOnly();
     setPlaying(false);
     setTime(0);
     setCurrentSlide(0);
@@ -740,6 +750,7 @@ function App() {
         try {
           const res = await audioRef.current.loadVoiceover(r.voFiles);
           setTotalDuration(res.totalDuration);
+          setVoLoadedTick(t => t + 1);
         } catch (e) { console.warn(e); }
       }
       if (r.bgmFile) {
@@ -1109,6 +1120,20 @@ function App() {
             value={bgmFile?.name || null}
             dense
           />
+          {bgmFile && (
+            <button
+              onClick={toggleBgmPreview}
+              style={{
+                marginTop: 8, width: '100%', padding: '8px 12px',
+                background: bgmPreviewing ? SC_COLORS.accent : 'transparent',
+                color: bgmPreviewing ? '#000' : SC_COLORS.text,
+                border: `1px solid ${SC_COLORS.border}`, borderRadius: 8,
+                cursor: 'pointer', fontSize: 12, fontWeight: 600,
+              }}
+            >
+              {bgmPreviewing ? '■ 停止試聽' : '▶ 試聽 BGM'}
+            </button>
+          )}
           <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
             <span style={{ fontSize: 12, color: SC_COLORS.textDim, width: 60 }}>BGM 音量</span>
             <input type="range" min={0} max={0.5} step={0.01} value={bgmBase}
@@ -1473,4 +1498,5 @@ function App() {
 }
 
 // Mount
-export default App;
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App />);
