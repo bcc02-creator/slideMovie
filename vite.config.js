@@ -6,7 +6,7 @@ import react from '@vitejs/plugin-react';
 // - User/Org page (https://USER.github.io/)     → base: '/'
 // - Custom domain                               → base: '/'
 export default defineConfig({
-  base: '/Slidecast/',
+  base: '/',
   plugins: [react()],
   server: {
     port: 5173,
