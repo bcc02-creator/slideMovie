@@ -179,3 +179,4 @@ Cross-Origin-Embedder-Policy: require-corp
 - Chrome / Edge 90+（推薦）
 - Firefox 100+
 - Safari 16+（部分功能受限）
+ 
