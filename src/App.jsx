@@ -2,7 +2,7 @@
 // Slidecast — main React app
 // ===========================================================
 
-const { useState, useEffect, useRef, useCallback, useMemo } = React;
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 
 // ----- Color tokens -----
 const SC_COLORS = {
