@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-TW">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Slidecast — 投影片配音影片產生器</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+TC:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  * { box-sizing: border-box; }
+  html, body, #root { margin: 0; padding: 0; height: 100%; background: #0b0d12; }
+  body { font-family: "Inter","Noto Sans TC","Microsoft JhengHei",sans-serif; color: #e6ebf5; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: #11141b; }
+  ::-webkit-scrollbar-thumb { background: #262d3d; border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: #3a4358; }
+  input[type="range"] { accent-color: #7c9cff; }
+  button:hover:not(:disabled) { filter: brightness(1.12); }
+  @keyframes sc-spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="module" src="/src/main.jsx"></script>
+</body>
+</html>
