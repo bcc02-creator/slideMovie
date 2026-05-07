@@ -6,6 +6,14 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { SlidecastAudio, SlidecastRecorder } from './audio.js';
 import { SlidecastTTS } from './tts.js';
 import { SlidecastFFmpeg } from './ffmpeg.js';
+import { SlidecastRenderer } from './renderer.js';
+import { SlidecastDB } from './db.js';
+import { buildSnapshot, rehydrateProject } from './persist.js';
+import {
+  parseTranscriptFile, renderPdfToFrames,
+  imageFilesToUrls, htmlFileToUrl, audioFilesToList,
+  fmtTime, fmtBytes,
+} from './parsers.js';
 
 // ----- Color tokens -----
 const SC_COLORS = {
