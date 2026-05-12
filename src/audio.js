@@ -23,6 +23,7 @@ export class SlidecastAudio {
     this.startedAtVoOffset = 0;
     this.playing = false;
     this.bgmStartedAt = 0;
+    this.bgmIsStandalone = false; // true while BGM runs via playBgmOnly (not tied to VO)
   }
 
   ensureCtx() {
@@ -74,11 +75,32 @@ export class SlidecastAudio {
     if (typeof duck === 'number') this.bgmDuckLevel = duck;
   }
 
+  // Stop only VO sources, leaving a standalone BGM source untouched.
+  _stopVoOnly() {
+    for (const s of this.scheduledSources) {
+      if (s === this.bgmSource) continue;
+      try { s.stop(); } catch {}
+      try { s.disconnect(); } catch {}
+    }
+    this.scheduledSources = this.scheduledSources.filter(s => s === this.bgmSource);
+    this.playing = false;
+  }
+
   // Schedule playback starting at absolute-VO offset (seconds since start)
   play(fromOffset = 0) {
     this.ensureCtx();
     if (this.ctx.state === 'suspended') this.ctx.resume();
-    this.stop(); // clear prior schedule
+
+    // If BGM was started standalone (e.g. during intro bumper), let it continue
+    // without a restart gap. Only VO sources need to be cleared.
+    const bgmContinue = this.bgmIsStandalone && !!this.bgmSource;
+    if (bgmContinue) {
+      this._stopVoOnly();
+      this.bgmIsStandalone = false;
+    } else {
+      this.stop();
+    }
+
     const t0 = this.ctx.currentTime + 0.05;
     this.startedAtCtxTime = t0;
     this.startedAtVoOffset = fromOffset;
@@ -100,24 +122,31 @@ export class SlidecastAudio {
       this.scheduledSources.push(src);
     }
 
-    // BGM loop with simple duck schedule (always at base; could add per-segment ducking)
     if (this.bgmBuffer) {
-      const src = this.ctx.createBufferSource();
-      src.buffer = this.bgmBuffer;
-      src.loop = true;
-      src.connect(this.bgmGain);
-      src.start(t0);
-      this.bgmSource = src;
-      this.scheduledSources.push(src);
-      // ramp up to base level
-      const g = this.bgmGain.gain;
-      g.cancelScheduledValues(this.ctx.currentTime);
-      g.setValueAtTime(0, this.ctx.currentTime);
-      g.linearRampToValueAtTime(this.bgmBaseLevel, t0 + 0.6);
-      // fade out at end
       const endAt = t0 + (this.totalVoDuration - fromOffset);
-      g.setValueAtTime(this.bgmBaseLevel, endAt - 1.0);
-      g.linearRampToValueAtTime(0, endAt + 0.2);
+      if (bgmContinue) {
+        // BGM already playing — snap gain to base level (ramp may still be in
+        // progress if the intro was shorter than 0.6 s) then schedule fade-out.
+        const g = this.bgmGain.gain;
+        g.cancelScheduledValues(this.ctx.currentTime);
+        g.setValueAtTime(this.bgmBaseLevel, this.ctx.currentTime);
+        g.setValueAtTime(this.bgmBaseLevel, endAt - 1.0);
+        g.linearRampToValueAtTime(0, endAt + 0.2);
+      } else {
+        const src = this.ctx.createBufferSource();
+        src.buffer = this.bgmBuffer;
+        src.loop = true;
+        src.connect(this.bgmGain);
+        src.start(t0);
+        this.bgmSource = src;
+        this.scheduledSources.push(src);
+        const g = this.bgmGain.gain;
+        g.cancelScheduledValues(this.ctx.currentTime);
+        g.setValueAtTime(0, this.ctx.currentTime);
+        g.linearRampToValueAtTime(this.bgmBaseLevel, t0 + 0.6);
+        g.setValueAtTime(this.bgmBaseLevel, endAt - 1.0);
+        g.linearRampToValueAtTime(0, endAt + 0.2);
+      }
     }
 
     this.playing = true;
@@ -138,6 +167,50 @@ export class SlidecastAudio {
     this.playing = false;
   }
 
+  // Play BGM standalone (TTS mode or BGM preview; not tied to VO scheduling)
+  playBgmOnly() {
+    this.ensureCtx();
+    if (this.ctx.state === 'suspended') this.ctx.resume();
+    if (this.bgmSource) {
+      const old = this.bgmSource;
+      this.bgmSource = null;
+      this.scheduledSources = this.scheduledSources.filter(s => s !== old);
+      try { old.stop(); } catch {}
+      try { old.disconnect(); } catch {}
+    }
+    if (!this.bgmBuffer) return;
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.bgmBuffer;
+    src.loop = true;
+    src.connect(this.bgmGain);
+    src.start(this.ctx.currentTime);
+    this.bgmSource = src;
+    this.bgmIsStandalone = true;
+    const g = this.bgmGain.gain;
+    g.cancelScheduledValues(this.ctx.currentTime);
+    g.setValueAtTime(0, this.ctx.currentTime);
+    g.linearRampToValueAtTime(this.bgmBaseLevel, this.ctx.currentTime + 0.6);
+  }
+
+  // Stop BGM without touching VO sources
+  stopBgmOnly() {
+    this.bgmIsStandalone = false;
+    const src = this.bgmSource;
+    this.bgmSource = null;
+    if (src) {
+      this.scheduledSources = this.scheduledSources.filter(s => s !== src);
+      try { src.stop(); } catch {}
+      try { src.disconnect(); } catch {}
+    }
+    if (this.bgmGain && this.ctx) {
+      const g = this.bgmGain.gain;
+      const now = this.ctx.currentTime;
+      g.cancelScheduledValues(now);
+      g.setValueAtTime(g.value, now);
+      g.linearRampToValueAtTime(0, now + 0.15);
+    }
+  }
+
   // Current absolute VO time (seconds since start of segment 0)
   getCurrentTime() {
     if (!this.playing || !this.ctx) return this.startedAtVoOffset;
@@ -156,6 +229,14 @@ export class SlidecastAudio {
   getRecordingStream() {
     this.ensureCtx();
     return this.recordDest.stream;
+  }
+
+  connectMediaElement(el) {
+    this.ensureCtx();
+    if (this.ctx.state === 'suspended') this.ctx.resume();
+    const src = this.ctx.createMediaElementSource(el);
+    src.connect(this.master);
+    return src;
   }
 }
 
@@ -203,10 +284,15 @@ export class SlidecastRecorder {
   }
 
   async stop() {
-    if (!this.recorder) return null;
+    if (!this.recorder || this.recorder.state === 'inactive') {
+      const blob = this.chunks.length ? new Blob(this.chunks, { type: this.mimeType }) : null;
+      this.chunks = [];
+      return blob;
+    }
     return await new Promise((resolve) => {
       this.recorder.onstop = () => {
         const blob = new Blob(this.chunks, { type: this.mimeType });
+        this.chunks = [];
         resolve(blob);
       };
       this.recorder.stop();

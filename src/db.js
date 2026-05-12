@@ -87,6 +87,8 @@ async function saveProject(snapshot, existingId, onProgress) {
   if (blobs.vo) totalBlobs += blobs.vo.length;
   if (blobs.bgm) totalBlobs += 1;
   if (blobs.html) totalBlobs += 1;
+  if (blobs.intro) totalBlobs += 1;
+  if (blobs.outro) totalBlobs += 1;
   let written = 0;
   const tick = () => {
     written++;
@@ -121,6 +123,12 @@ async function saveProject(snapshot, existingId, onProgress) {
   if (blobs.html) {
     await writeBlob('html', 0, blobs.html, blobs.htmlName || null);
   }
+  if (blobs.intro) {
+    await writeBlob('intro', 0, blobs.intro, blobs.introName || null);
+  }
+  if (blobs.outro) {
+    await writeBlob('outro', 0, blobs.outro, blobs.outroName || null);
+  }
 
   // Write project metadata + payload
   const t2 = tx(db, ['projects'], 'readwrite');
@@ -148,11 +156,15 @@ async function loadProject(id) {
   const vo = [];
   let bgm = null;
   let html = null;
+  let intro = null;
+  let outro = null;
   for (const row of blobRows) {
     if (row.role === 'slide') slides[row.index] = row.blob;
     else if (row.role === 'vo') vo[row.index] = { name: row.name, blob: row.blob };
     else if (row.role === 'bgm') bgm = { blob: row.blob, name: row.name };
     else if (row.role === 'html') html = { blob: row.blob, name: row.name };
+    else if (row.role === 'intro') intro = { blob: row.blob, name: row.name };
+    else if (row.role === 'outro') outro = { blob: row.blob, name: row.name };
   }
   return {
     id: project.id,
@@ -165,6 +177,8 @@ async function loadProject(id) {
       vo: vo.filter(Boolean),
       bgm,
       html,
+      intro,
+      outro,
     },
   };
 }

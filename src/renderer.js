@@ -40,6 +40,10 @@ export class SlidecastRenderer {
     // rAF
     this._raf = null;
     this._rendering = false;
+
+    // bumper (intro/outro) overlay
+    this._bumperImage = null; // HTMLImageElement
+    this._bumperVideo = null; // HTMLVideoElement
   }
 
   setBackground(c) { this.bg = c; }
@@ -79,6 +83,10 @@ export class SlidecastRenderer {
 
   setSubtitle(text) { this.currentSubtitle = text || ''; }
 
+  setBumperImage(img) { this._bumperImage = img; this._bumperVideo = null; }
+  setBumperVideo(vid) { this._bumperVideo = vid; this._bumperImage = null; }
+  clearBumper() { this._bumperImage = null; this._bumperVideo = null; }
+
   start() {
     if (this._rendering) return;
     this._rendering = true;
@@ -98,6 +106,28 @@ export class SlidecastRenderer {
 
   draw() {
     const { ctx, width: W, height: H } = this;
+
+    if (this._bumperImage) {
+      ctx.fillStyle = this.bg;
+      ctx.fillRect(0, 0, W, H);
+      this._drawContain(this._bumperImage, 0, 0, W, H);
+      return;
+    }
+    if (this._bumperVideo && this._bumperVideo.readyState >= 2) {
+      const vid = this._bumperVideo;
+      ctx.fillStyle = this.bg;
+      ctx.fillRect(0, 0, W, H);
+      if (vid.videoWidth > 0) {
+        const ar = vid.videoWidth / vid.videoHeight;
+        const targetAr = W / H;
+        let dw, dh;
+        if (ar > targetAr) { dw = W; dh = W / ar; }
+        else { dh = H; dw = H * ar; }
+        ctx.drawImage(vid, (W - dw) / 2, (H - dh) / 2, dw, dh);
+      }
+      return;
+    }
+
     ctx.fillStyle = this.bg;
     ctx.fillRect(0, 0, W, H);
 

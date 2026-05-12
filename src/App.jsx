@@ -203,6 +203,14 @@ function App() {
   const [bgmBase, setBgmBase] = useState(0.18);
   const [resolution, setResolution] = useState('1920x1080');
 
+  // ---- Intro / Outro ----
+  const [introFile, setIntroFile] = useState(null);
+  const [introType, setIntroType] = useState(null); // 'image' | 'video'
+  const [introDuration, setIntroDuration] = useState(3);
+  const [outroFile, setOutroFile] = useState(null);
+  const [outroType, setOutroType] = useState(null);
+  const [outroDuration, setOutroDuration] = useState(3);
+
   // ---- Project persistence ----
   const [projectId, setProjectId] = useState(null);
   const [projectName, setProjectName] = useState('');
@@ -230,8 +238,32 @@ function App() {
   const canvasRef = useRef(null);
   const iframeRef = useRef(null);
   const tickRef = useRef(null);
+  const playbackEndResolveRef = useRef(null);
+  const recordingAbortedRef = useRef(false);
 
   if (!audioRef.current) audioRef.current = new SlidecastAudio();
+
+  const playDoneChime = () => {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const notes = [880, 1108, 1318]; // A5 C#6 E6 — major triad arpeggio
+      notes.forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        const t = ctx.currentTime + i * 0.12;
+        gain.gain.setValueAtTime(0, t);
+        gain.gain.linearRampToValueAtTime(0.18, t + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + 0.45);
+        osc.start(t);
+        osc.stop(t + 0.45);
+      });
+      setTimeout(() => ctx.close(), 1800);
+    } catch {}
+  };
 
   // ---- Load TTS voices ----
   useEffect(() => {
@@ -350,6 +382,73 @@ function App() {
       toast.push(`字幕載入：${f.name} (${parsed.kind})`, 'ok');
     } catch (e) {
       toast.push('字幕解析失敗：' + e.message, 'err');
+    }
+  };
+
+  const onIntro = (files) => {
+    const f = files[0];
+    setIntroFile(f);
+    setIntroType(f.type.startsWith('video/') ? 'video' : 'image');
+    toast.push(`片頭已載入：${f.name}`, 'ok');
+  };
+  const onOutro = (files) => {
+    const f = files[0];
+    setOutroFile(f);
+    setOutroType(f.type.startsWith('video/') ? 'video' : 'image');
+    toast.push(`片尾已載入：${f.name}`, 'ok');
+  };
+
+  // Play an intro/outro bumper on the canvas during recording.
+  // Image: shown for `duration` seconds. Video: played until end.
+  // Audio of video files is routed through Web Audio for capture.
+  const playBumper = async (file, type, duration) => {
+    const renderer = rendererRef.current;
+    if (type === 'image') {
+      const url = URL.createObjectURL(file);
+      try {
+        const img = await new Promise((res, rej) => {
+          const im = new Image();
+          im.onload = () => res(im);
+          im.onerror = rej;
+          im.src = url;
+        });
+        renderer.setBumperImage(img);
+        await new Promise((res) => {
+          const ms = Math.round(duration * 1000);
+          let elapsed = 0;
+          const id = setInterval(() => {
+            elapsed += 100;
+            if (recordingAbortedRef.current || elapsed >= ms) { clearInterval(id); res(); }
+          }, 100);
+        });
+      } finally {
+        renderer.clearBumper();
+        URL.revokeObjectURL(url);
+      }
+    } else if (type === 'video') {
+      const url = URL.createObjectURL(file);
+      const vid = document.createElement('video');
+      vid.src = url;
+      vid.crossOrigin = 'anonymous';
+      let audioSrc = null;
+      try {
+        audioSrc = audioRef.current.connectMediaElement(vid);
+        renderer.setBumperVideo(vid);
+        await new Promise((res) => {
+          const checkAbort = setInterval(() => {
+            if (recordingAbortedRef.current) { clearInterval(checkAbort); vid.pause(); res(); }
+          }, 200);
+          vid.onended = () => { clearInterval(checkAbort); res(); };
+          vid.onerror = () => { clearInterval(checkAbort); res(); };
+          vid.play().catch(() => { clearInterval(checkAbort); res(); });
+        });
+      } finally {
+        renderer.clearBumper();
+        try { audioSrc?.disconnect(); } catch {}
+        vid.pause();
+        vid.src = '';
+        URL.revokeObjectURL(url);
+      }
     }
   };
 
@@ -573,6 +672,10 @@ function App() {
     setCurrentSlide(0);
     rendererRef.current.setSlide(0);
     rendererRef.current.setSubtitle('');
+    // Directly signal recording sequence — React 18 batching prevents the
+    // state-based useEffect from seeing time>=totalDuration before time resets.
+    const r = playbackEndResolveRef.current;
+    if (r) { playbackEndResolveRef.current = null; r(); }
   };
   const handleSeek = (t) => {
     if (voMode === 'tts') {
@@ -602,28 +705,88 @@ function App() {
   };
 
   const canRecord = segments.length > 0 && (slidesMode === 'pdf' || slidesMode === 'images') && voMode !== 'tts';
-  const startRecording = () => {
+  const startRecording = async () => {
     if (!canRecord) {
       toast.push('錄製目前僅支援 PDF / 圖片來源', 'warn');
       return;
     }
+    if (recording) return;
     handleStop();
     setRecordedBlob(null);
+    setMp4Blob(null);
+    setMp4Stage('idle');
+    recordingAbortedRef.current = false;
+    playbackEndResolveRef.current = null;
     if (!recorderRef.current) recorderRef.current = new SlidecastRecorder(audioRef.current);
     try {
       recorderRef.current.start(canvasRef.current, 30, (e) => {
         toast.push('錄製錯誤：' + (e?.message || e), 'err');
-        setRecording(false);
+        recordingAbortedRef.current = true;
+        const r = playbackEndResolveRef.current;
+        playbackEndResolveRef.current = null;
+        if (r) r();
       });
       setRecording(true);
-      toast.push('開始錄製，自動從頭播放', 'ok');
-      setTimeout(() => { handlePlay(); }, 300);
+
+      // 1. Intro bumper (start BGM now so it carries into the main content)
+      if (introFile && !recordingAbortedRef.current) {
+        if (bgmFile) audioRef.current.playBgmOnly();
+        const hint = introType === 'image' ? ` (${introDuration}s)` : '';
+        toast.push(`片頭播放中${hint}…`, 'info', Math.max(2000, introDuration * 1000 + 500));
+        await playBumper(introFile, introType, introDuration);
+      }
+
+      // 2. Main content
+      if (!recordingAbortedRef.current) {
+        const mainDone = new Promise(r => { playbackEndResolveRef.current = r; });
+        await new Promise(r => setTimeout(r, 300));
+        if (!recordingAbortedRef.current) {
+          handlePlay();
+          toast.push('開始錄製，自動從頭播放', 'ok');
+          await mainDone;
+        }
+      }
+
+      // 3. Outro bumper
+      if (outroFile && !recordingAbortedRef.current) {
+        const hint = outroType === 'image' ? ` (${outroDuration}s)` : '';
+        toast.push(`片尾播放中${hint}…`, 'info', Math.max(2000, outroDuration * 1000 + 500));
+        await playBumper(outroFile, outroType, outroDuration);
+      }
+
+      // 4. Finalize
+      if (!recordingAbortedRef.current) {
+        handleStop();
+        const blob = await recorderRef.current.stop();
+        setRecording(false);
+        if (blob) {
+          setRecordedBlob(blob);
+          toast.push(`錄製完成 (${fmtBytes(blob.size)})`, 'ok');
+        }
+      }
     } catch (e) {
-      toast.push('無法開始錄製：' + e.message, 'err');
+      console.error('Recording sequence error:', e);
+      rendererRef.current?.clearBumper();
+      recordingAbortedRef.current = true;
+      handleStop();
+      try {
+        const blob = await recorderRef.current?.stop();
+        setRecording(false);
+        if (blob && blob.size > 0) {
+          setRecordedBlob(blob);
+          toast.push(`錄製中斷，已保存部分內容 (${fmtBytes(blob.size)})`, 'warn');
+        }
+      } catch { setRecording(false); }
+      toast.push('錄製失敗：' + (e?.message || e), 'err');
     }
   };
   const stopRecording = async () => {
     if (!recording) return;
+    recordingAbortedRef.current = true;
+    const r = playbackEndResolveRef.current;
+    playbackEndResolveRef.current = null;
+    rendererRef.current?.clearBumper();
+    if (r) r();
     handlePause();
     const blob = await recorderRef.current.stop();
     setRecording(false);
@@ -633,10 +796,14 @@ function App() {
     }
   };
 
-  // Auto-stop recording when playback hits end
+  // Signal the recording sequence when main playback ends (sequence handles outro + finalize)
   useEffect(() => {
     if (recording && !playing && time >= totalDuration && totalDuration > 0) {
-      stopRecording();
+      const r = playbackEndResolveRef.current;
+      if (r) {
+        playbackEndResolveRef.current = null;
+        r();
+      }
     }
   }, [recording, playing, time, totalDuration]);
 
@@ -670,6 +837,8 @@ function App() {
       ttsVoiceURI, ttsRate, ttsPitch,
       segments,
       showSubs, bgmBase, resolution,
+      introFile, introType, introDuration,
+      outroFile, outroType, outroDuration,
     });
   };
 
@@ -749,6 +918,12 @@ function App() {
       setShowSubs(!!p.showSubs);
       setBgmBase(p.bgmBase ?? 0.18);
       setResolution(p.resolution || '1920x1080');
+      setIntroFile(r.introFile || null);
+      setIntroType(r.introFile ? (r.introFile.type.startsWith('video/') ? 'video' : 'image') : null);
+      setIntroDuration(p.introDuration ?? 3);
+      setOutroFile(r.outroFile || null);
+      setOutroType(r.outroFile ? (r.outroFile.type.startsWith('video/') ? 'video' : 'image') : null);
+      setOutroDuration(p.outroDuration ?? 3);
 
       // Tell renderer/audio engines what to use
       if (r.slidesMode === 'pdf' || p.slidesMode === 'pdf' || p.slidesMode === 'images') {
@@ -799,6 +974,12 @@ function App() {
     setRecordedBlob(null);
     setMp4Blob(null);
     setMp4Stage('idle');
+    setIntroFile(null);
+    setIntroType(null);
+    setIntroDuration(3);
+    setOutroFile(null);
+    setOutroType(null);
+    setOutroDuration(3);
     toast.push('已新建空專案', 'info');
   };
 
@@ -830,6 +1011,8 @@ function App() {
     transcript, transcriptName,
     ttsVoiceURI, ttsRate, ttsPitch,
     segments, showSubs, bgmBase, resolution,
+    introFile, introType, introDuration,
+    outroFile, outroType, outroDuration,
     projectName,
   ]);
 
@@ -870,6 +1053,7 @@ function App() {
       setMp4Blob(blob);
       setMp4Stage('done');
       setMp4Progress(1);
+      playDoneChime();
       toast.push(`MP4 轉檔完成 (${fmtBytes(blob.size)})`, 'ok');
     } catch (e) {
       if (fakeTimer) { clearInterval(fakeTimer); fakeTimer = null; }
@@ -937,7 +1121,14 @@ function App() {
 
           {totalDuration > 0 && (
             <span style={{ fontSize: 11, color: SC_COLORS.textDim, padding: '0 8px', borderLeft: `1px solid ${SC_COLORS.border}` }}>
-              總長 {fmtTime(totalDuration)} • {segments.length} 段
+              {(() => {
+                const extra = (introFile && introType === 'image' ? introDuration : 0)
+                            + (outroFile  && outroType  === 'image' ? outroDuration  : 0);
+                const recDur = totalDuration + extra;
+                return extra > 0
+                  ? `錄製總長 ${fmtTime(recDur)} • ${segments.length} 段`
+                  : `總長 ${fmtTime(totalDuration)} • ${segments.length} 段`;
+              })()}
             </span>
           )}
 
@@ -1153,6 +1344,73 @@ function App() {
             <span style={{ fontSize: 11, color: SC_COLORS.textDim, width: 32, textAlign: 'right' }}>
               {Math.round(bgmBase * 100)}
             </span>
+          </div>
+        </Section>
+
+        <Section n={5} title="片頭 / 片尾" subtitle="可選；錄製成影片時插入">
+          <div style={{ display: 'grid', gap: 12 }}>
+            {/* Intro */}
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: SC_COLORS.textDim, letterSpacing: 1 }}>片頭</span>
+                {introFile && (
+                  <button onClick={() => { setIntroFile(null); setIntroType(null); }}
+                    style={{ ...tbBtn, fontSize: 10, padding: '2px 8px', color: SC_COLORS.textDim }}>✕ 移除</button>
+                )}
+              </div>
+              <DropZone
+                label="上傳片頭"
+                hint="PNG / JPG 圖片 或 MP4 / WebM 影片"
+                accept="image/*,video/*"
+                onFiles={onIntro}
+                value={introFile ? `${introFile.name}（${introType === 'video' ? '影片' : '圖片'}）` : null}
+                dense
+              />
+              {introFile && introType === 'image' && (
+                <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 11, color: SC_COLORS.textDim, whiteSpace: 'nowrap' }}>顯示時長</span>
+                  <input type="range" min={1} max={30} step={0.5} value={introDuration}
+                    onChange={e => setIntroDuration(+e.target.value)} style={{ flex: 1 }} />
+                  <span style={{ fontSize: 11, color: SC_COLORS.textDim, width: 32, textAlign: 'right' }}>{introDuration}s</span>
+                </div>
+              )}
+            </div>
+
+            {/* Outro */}
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: SC_COLORS.textDim, letterSpacing: 1 }}>片尾</span>
+                {outroFile && (
+                  <button onClick={() => { setOutroFile(null); setOutroType(null); }}
+                    style={{ ...tbBtn, fontSize: 10, padding: '2px 8px', color: SC_COLORS.textDim }}>✕ 移除</button>
+                )}
+              </div>
+              <DropZone
+                label="上傳片尾"
+                hint="PNG / JPG 圖片 或 MP4 / WebM 影片"
+                accept="image/*,video/*"
+                onFiles={onOutro}
+                value={outroFile ? `${outroFile.name}（${outroType === 'video' ? '影片' : '圖片'}）` : null}
+                dense
+              />
+              {outroFile && outroType === 'image' && (
+                <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 11, color: SC_COLORS.textDim, whiteSpace: 'nowrap' }}>顯示時長</span>
+                  <input type="range" min={1} max={30} step={0.5} value={outroDuration}
+                    onChange={e => setOutroDuration(+e.target.value)} style={{ flex: 1 }} />
+                  <span style={{ fontSize: 11, color: SC_COLORS.textDim, width: 32, textAlign: 'right' }}>{outroDuration}s</span>
+                </div>
+              )}
+            </div>
+
+            {(introFile || outroFile) && !canRecord && segments.length > 0 && (
+              <div style={{
+                fontSize: 11, color: SC_COLORS.warn, background: 'rgba(240,184,96,0.08)',
+                border: '1px solid rgba(240,184,96,0.3)', borderRadius: 6, padding: 8, lineHeight: 1.5,
+              }}>
+                片頭／片尾僅在「錄製成影片」時生效（需 PDF 或圖片來源）。
+              </div>
+            )}
           </div>
         </Section>
 

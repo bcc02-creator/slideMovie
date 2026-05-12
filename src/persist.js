@@ -24,6 +24,8 @@ export async function buildSnapshot(state) {
     ttsVoiceURI, ttsRate, ttsPitch,
     segments,
     showSubs, bgmBase, resolution,
+    introFile, introType, introDuration,
+    outroFile, outroType, outroDuration,
   } = state;
 
   // Slides → Blob[]
@@ -75,6 +77,10 @@ export async function buildSnapshot(state) {
       showSubs: !!showSubs,
       bgmBase: bgmBase ?? 0.18,
       resolution: resolution || '1920x1080',
+      introType: introType || null,
+      introDuration: introDuration ?? 3,
+      outroType: outroType || null,
+      outroDuration: outroDuration ?? 3,
       version: 1,
     },
     _blobs: {
@@ -84,6 +90,10 @@ export async function buildSnapshot(state) {
       bgmName: bgmFile?.name || null,
       html: htmlBlob,
       htmlName: htmlName,
+      intro: introFile || null,
+      introName: introFile?.name || null,
+      outro: outroFile || null,
+      outroName: outroFile?.name || null,
     },
   };
 }
@@ -115,6 +125,17 @@ export function rehydrateProject(loaded) {
     htmlDeckUrl = URL.createObjectURL(htmlDeckFile);
   }
 
+  let introFile = null;
+  if (blobs.intro) {
+    const { blob, name } = blobs.intro;
+    introFile = blob instanceof File ? blob : new File([blob], name || 'intro', { type: blob.type });
+  }
+  let outroFile = null;
+  if (blobs.outro) {
+    const { blob, name } = blobs.outro;
+    outroFile = blob instanceof File ? blob : new File([blob], name || 'outro', { type: blob.type });
+  }
+
   return {
     id: loaded.id,
     name: loaded.name,
@@ -125,6 +146,8 @@ export function rehydrateProject(loaded) {
     bgmFile,
     htmlDeckUrl,
     htmlDeckFile,
+    introFile,
+    outroFile,
   };
 }
 
