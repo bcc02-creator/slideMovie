@@ -1465,9 +1465,12 @@ function App() {
                 }}
               />
               {!slidesMode && (
-                <div style={{ color: SC_COLORS.textDim, fontSize: 14, textAlign: 'center' }}>
-                  上傳投影片開始<br />
-                  <span style={{ fontSize: 11 }}>左側欄選擇 PDF、圖片或 HTML deck</span>
+                <div style={{
+                  color: SC_COLORS.textDim, fontSize: 13, textAlign: 'center',
+                  padding: '0 16px', lineHeight: 1.6, wordBreak: 'keep-all',
+                  whiteSpace: 'normal', maxWidth: '100%',
+                }}>
+                  上傳素材開始製作
                 </div>
               )}
             </div>
