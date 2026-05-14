@@ -33,7 +33,10 @@ export class SlidecastFFmpeg {
       this._worker.addEventListener('message', handler);
       this._worker.onerror = (e) => {
         this._worker.removeEventListener('message', handler);
-        reject(new Error(e.message || 'Worker failed to load'));
+        const msg = e.message || e.filename
+          ? `Worker error at ${e.filename}:${e.lineno} — ${e.message}`
+          : 'Worker 無法啟動（請確認瀏覽器支援 WebAssembly 並重新整理頁面）';
+        reject(new Error(msg));
       };
       this._worker.postMessage({ type: 'load' });
     });

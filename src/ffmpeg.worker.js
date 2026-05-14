@@ -1,10 +1,5 @@
 'use strict';
 
-// Load the core directly — ffmpeg-core.js already guards `typeof document`
-// so it's safe in a classic Worker with no polyfill needed.
-// This skips the @ffmpeg/ffmpeg wrapper's 23 MB blob-URL buffering that caused hangs.
-importScripts('/ffmpeg/ffmpeg-core.js');
-
 let Core = null;
 let mainFn = null;
 let duration = 0;
@@ -40,20 +35,25 @@ const buildArgv = (args) => {
 self.onmessage = async ({ data }) => {
   try {
     if (data.type === 'load') {
-      Core = await createFFmpegCore({
-        printErr: parseProgress,
-        print: (msg) => {
-          if (msg === 'FFMPEG_END') {
-            // handled via onExit / Promise resolve below
-          }
-        },
-        locateFile: (path) => {
-          if (path.endsWith('.wasm')) return '/ffmpeg/ffmpeg-core.wasm';
-          if (path.endsWith('.worker.js')) return '/ffmpeg/ffmpeg-core.worker.js';
-          return path;
-        },
-      });
-      mainFn = Core.cwrap('main', 'number', ['number', 'number']);
+      // Import inside the handler so any failure is caught and reported
+      // as a proper { type: 'error' } message instead of a silent onerror.
+      if (!Core) {
+        importScripts('/ffmpeg/ffmpeg-core.js');
+        Core = await createFFmpegCore({
+          printErr: parseProgress,
+          print: (msg) => {
+            if (msg === 'FFMPEG_END') {
+              // handled via onExit / Promise resolve below
+            }
+          },
+          locateFile: (path) => {
+            if (path.endsWith('.wasm')) return '/ffmpeg/ffmpeg-core.wasm';
+            if (path.endsWith('.worker.js')) return '/ffmpeg/ffmpeg-core.worker.js';
+            return path;
+          },
+        });
+        mainFn = Core.cwrap('main', 'number', ['number', 'number']);
+      }
       self.postMessage({ type: 'ready' });
 
     } else if (data.type === 'convert') {
@@ -61,7 +61,6 @@ self.onmessage = async ({ data }) => {
       Core.FS.writeFile('in.webm', new Uint8Array(data.buffer));
 
       await new Promise((resolve, reject) => {
-        // Patch printErr & print so we can detect FFMPEG_END and parse progress
         const origPrintErr = Core.printErr;
         const origPrint = Core.print;
         Core.printErr = (msg) => { origPrintErr?.(msg); parseProgress(msg); };

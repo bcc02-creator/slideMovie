@@ -216,6 +216,12 @@ function App() {
   const [mp4Error, setMp4Error] = useState('');
   const ffmpegRef = useRef(null);
 
+  const [storageEstimate, setStorageEstimate] = useState(null);
+  const refreshStorageEstimate = async () => {
+    const est = await SlidecastDB.getStorageEstimate();
+    if (est) setStorageEstimate(est);
+  };
+
   // ---- Refs ----
   const audioRef = useRef(null);
   const recorderRef = useRef(null);
@@ -305,6 +311,10 @@ function App() {
 
   const onBgm = async (files) => {
     const f = files[0];
+    if (bgmPreviewing) {
+      audioRef.current.stopBgmOnly();
+      setBgmPreviewing(false);
+    }
     setBgmFile(f);
     try { await audioRef.current.loadBGM(f); toast.push('背景音樂已載入', 'ok'); }
     catch (e) { toast.push('BGM 失敗：' + e.message, 'err'); }
@@ -673,7 +683,7 @@ function App() {
     }
   };
 
-  useEffect(() => { refreshProjectsList(); }, []);
+  useEffect(() => { refreshProjectsList(); refreshStorageEstimate(); }, []);
 
   // Cmd/Ctrl+S to save
   useEffect(() => {
@@ -691,6 +701,10 @@ function App() {
 
   const saveCurrentProject = async (asCopy = false) => {
     if (savingProject) return;
+    // Request persistent storage on the very first save (fire-and-forget)
+    if (!projectId && !asCopy && navigator.storage?.persist) {
+      navigator.storage.persist().catch(() => {});
+    }
     setSavingProject(true);
     try {
       const snap = await buildCurrentSnapshot();
@@ -700,10 +714,16 @@ function App() {
       setProjectName(snap.name);
       setLastSavedAt(Date.now());
       await refreshProjectsList();
+      refreshStorageEstimate();
       toast.push(asCopy ? '已另存新專案' : '已儲存', 'ok');
     } catch (e) {
       console.error(e);
-      toast.push('儲存失敗：' + e.message, 'err');
+      if (e?.name === 'QuotaExceededError' || e?.name === 'NS_ERROR_DOM_QUOTA_REACHED') {
+        toast.push('儲存失敗：瀏覽器儲存空間已滿，請刪除舊專案或清理瀏覽器資料。', 'err', 8000);
+      } else {
+        toast.push('儲存失敗：' + e.message, 'err');
+      }
+      refreshStorageEstimate();
     } finally {
       setSavingProject(false);
     }
@@ -1134,6 +1154,33 @@ function App() {
             ⚠ 投影片數 ({slidesCount}) 與配音段數 ({segCount}) 不一致；將以段數為準，多餘投影片會被忽略。
           </div>
         )}
+
+        {storageEstimate && (() => {
+          const pct = Math.min(1, storageEstimate.usage / storageEstimate.quota);
+          const barColor = pct > 0.9 ? SC_COLORS.err : pct > 0.7 ? SC_COLORS.warn : SC_COLORS.borderHi;
+          const textColor = pct > 0.9 ? SC_COLORS.err : pct > 0.7 ? SC_COLORS.warn : SC_COLORS.textDim;
+          return (
+            <div style={{ marginTop: 8, paddingTop: 12, borderTop: `1px solid ${SC_COLORS.border}` }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
+                <span style={{ fontSize: 11, color: SC_COLORS.textDim }}>瀏覽器儲存空間</span>
+                <span style={{ fontSize: 11, color: textColor }}>
+                  {fmtBytes(storageEstimate.usage)} / {fmtBytes(storageEstimate.quota)}
+                </span>
+              </div>
+              <div style={{ height: 3, background: SC_COLORS.panel2, borderRadius: 2, overflow: 'hidden' }}>
+                <div style={{
+                  height: '100%', width: `${pct * 100}%`,
+                  background: barColor, borderRadius: 2, transition: 'width .4s',
+                }} />
+              </div>
+              {pct > 0.9 && (
+                <div style={{ fontSize: 10, color: SC_COLORS.err, marginTop: 5 }}>
+                  儲存空間接近上限，請刪除不用的舊專案。
+                </div>
+              )}
+            </div>
+          );
+        })()}
       </aside>
 
       {/* Main: preview + controls */}
