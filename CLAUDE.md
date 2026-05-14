@@ -1,4 +1,6 @@
-# Slidecast — CLAUDE.md
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## 專案概述
 
@@ -27,6 +29,7 @@ npm install          # 安裝相依
 npm run dev          # 開發伺服器 → http://localhost:5173
 npm run build        # 打包到 dist/
 npm run preview      # 預覽打包結果
+npm run deploy       # build + 直接推到 gh-pages branch（需先 git remote）
 ```
 
 ## 架構與模組
@@ -58,7 +61,7 @@ src/
 | 投影片 | `slidesMode`, `slideUrls`, `slidesCount`, `htmlDeckUrl` | `slidesMode`: `'pdf'` \| `'images'` \| `'html'` |
 | 配音 | `voMode`, `voFiles`, `totalDuration` | `voMode`: `'upload'` \| `'tts'` |
 | TTS | `ttsVoiceURI`, `ttsRate`, `ttsPitch`, `ttsVoices` | 透過 `SlidecastTTS` 驅動 |
-| 背景音樂 | `bgmFile`, `bgmBase`, `bgmPreviewing` | `bgmBase` 預設 0.18 |
+| 背景音樂 | `bgmFile`, `bgmBase`, `bgmPreviewing` | `bgmBase` 預設 0.18，ducking 時降至 0.06 |
 | 字幕 | `transcript`, `transcriptName`, `segments` | `segments`: `[{idx,start,end,slide,cues}]` |
 | 片頭／片尾 | `introFile`, `introType`, `introDuration`, `outroFile`, `outroType`, `outroDuration` | `type`: `'image'` \| `'video'` |
 | 播放 | `playing`, `time`, `currentSlide`, `currentCue` | |
@@ -66,12 +69,37 @@ src/
 | 錄製 | `recording`, `recordedBlob`, `mp4Stage`, `mp4Progress` | `mp4Stage`: `'idle'\|'loading'\|'converting'\|'done'\|'error'` |
 | 專案 | `projectId`, `projectName`, `savedProjects`, `autoSaveOn`, `lastSavedAt` | |
 
+### 音訊混音（audio.js）
+
+`SlidecastAudio` 建立單一 `AudioContext`，拓樸如下：
+
+```
+voGain ──┐
+          ├── master ──> ctx.destination
+bgmGain ─┘         └──> recordDest (MediaStreamDestination)
+```
+
+- `bgmBaseLevel` 0.18 / `bgmDuckLevel` 0.06：播放配音時 BGM 自動 duck。
+- `connectMediaElement(videoEl)` 把片頭片尾影片的音訊接進同一條 master，確保 MediaRecorder 能捕捉到。
+- `recordDest.stream` 與 canvas 的 `captureStream()` 合併後傳給 `MediaRecorder`。
+
 ### 片頭／片尾（Bumper）
 
 `playBumper(file, type, duration)` 在錄製序列中插入片頭或片尾：
 - **image 型**：在 canvas 渲染靜態圖片，持續 `duration` 秒。
 - **video 型**：透過 `connectMediaElement()` 將影片音訊路由進 Web Audio 以被 MediaRecorder 捕捉；播到結束為止。
 - 錄製序列：片頭 → 主體播放 → 片尾 → `stop()`，任何步驟皆可透過 `recordingAbortedRef` 中斷。
+
+### 字幕格式（parsers.js）
+
+支援四種輸入，`parseTranscriptFile()` 依副檔名自動判斷：
+
+| 格式 | 解析結果 | 備註 |
+|------|---------|------|
+| `.srt` / `.vtt` | `flatCues: [{start,end,text}]` | 時間軸字幕 |
+| `.json`（flat）| `flatCues: [{start,end,text,slide?}]` | 陣列每項含 start/end |
+| `.json`（per-slide）| `perSlideCues: [{slide,cues:[]}]` | 陣列每項含 cues 陣列 |
+| `.txt` | `perSlideCues`，依空行分段 | 每段對應一張投影片 |
 
 ### 自動儲存
 
@@ -117,4 +145,4 @@ Cross-Origin-Embedder-Policy: require-corp
 目前 `vercel.json` 設定支援 Vercel 部署（含 COOP/COEP headers）。  
 GitHub Actions workflow 在 `.github/workflows/deploy.yml`，自動部署到 GitHub Pages（**僅 WebM**，不支援 MP4）。
 
-`vite.config.js` 的 `base` 目前設為 `'/'`，部署到子路徑需修改。
+`vite.config.js` 的 `base` 目前設為 `'/'`，部署到子路徑（例如 GitHub Pages project page）需改為 `'/REPO/'`。
