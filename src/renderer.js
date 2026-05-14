@@ -1,9 +1,7 @@
 // ===========================================================
 // Slidecast — renderer
 // Draws current slide + subtitle on a 1920x1080 canvas, ~60fps.
-// Slide source can be:
-//   - 'images': dataURL/objectURL list  (PDF-rendered or uploaded images)
-//   - 'iframe': a hidden iframe element rendering the live HTML deck
+// Slide source: 'images' — dataURL/objectURL list (PDF-rendered or uploaded images)
 // ===========================================================
 
 export class SlidecastRenderer {
@@ -29,9 +27,8 @@ export class SlidecastRenderer {
     };
 
     // Slide source
-    this.mode = 'idle';        // 'images' | 'iframe' | 'idle'
+    this.mode = 'idle';        // 'images' | 'idle'
     this.images = [];          // HTMLImageElement[]
-    this.iframe = null;        // HTMLIFrameElement (hidden, sized to 1920x1080)
 
     // current state
     this.currentSlide = 0;
@@ -60,25 +57,8 @@ export class SlidecastRenderer {
     this.mode = 'images';
   }
 
-  attachIframe(iframe) {
-    this.iframe = iframe;
-    this.mode = 'iframe';
-  }
-
   setSlide(idx) {
     this.currentSlide = idx;
-    if (this.mode === 'iframe' && this.iframe && this.iframe.contentWindow) {
-      // Try to call a goTo() function exposed by deck-stage or our chrome
-      try {
-        const win = this.iframe.contentWindow;
-        if (typeof win.__slidecastGoTo === 'function') {
-          win.__slidecastGoTo(idx);
-        } else {
-          const stage = this.iframe.contentDocument?.querySelector('deck-stage');
-          if (stage && typeof stage.goTo === 'function') stage.goTo(idx);
-        }
-      } catch {}
-    }
   }
 
   setSubtitle(text) { this.currentSubtitle = text || ''; }
@@ -134,17 +114,6 @@ export class SlidecastRenderer {
     if (this.mode === 'images' && this.images.length) {
       const im = this.images[Math.max(0, Math.min(this.images.length - 1, this.currentSlide))];
       this._drawContain(im, 0, 0, W, H);
-    } else if (this.mode === 'iframe' && this.iframe) {
-      // Capture iframe via html2canvas-free path: use the iframe's documentElement
-      // via OffscreenCanvas-friendly trick? Browsers don't allow drawing iframes
-      // directly. Instead we layer the iframe behind the canvas using DOM and
-      // draw a transparent layer here.
-      // For recording, we therefore COMPOSITE in DOM via captureStream of the
-      // wrapper element using requestVideoFrameCallback — simpler to just
-      // use an HTMLCanvasElement-only mode. So in iframe mode, recording uses
-      // a different stream (canvas covers subtitles, iframe covers visuals).
-      // Here, leave the canvas transparent except for subtitles.
-      ctx.clearRect(0, 0, W, H);
     }
 
     if (this.subtitleStyle.enabled && this.currentSubtitle) {

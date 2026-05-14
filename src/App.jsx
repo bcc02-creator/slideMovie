@@ -4,14 +4,13 @@
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { SlidecastAudio, SlidecastRecorder } from './audio.js';
-import { SlidecastTTS } from './tts.js';
 import { SlidecastFFmpeg } from './ffmpeg.js';
 import { SlidecastRenderer } from './renderer.js';
 import { SlidecastDB } from './db.js';
 import { buildSnapshot, rehydrateProject } from './persist.js';
 import {
   parseTranscriptFile, renderPdfToFrames,
-  imageFilesToUrls, htmlFileToUrl, audioFilesToList,
+  imageFilesToUrls, audioFilesToList,
   fmtTime, fmtBytes,
 } from './parsers.js';
 
@@ -163,30 +162,17 @@ function App() {
   const toast = useToast();
 
   // ---- State: ingestion ----
-  const [slidesMode, setSlidesMode] = useState(null); // 'pdf' | 'images' | 'html'
+  const [slidesMode, setSlidesMode] = useState(null); // 'pdf' | 'images'
   const [slideUrls, setSlideUrls] = useState([]);     // image data/object URLs
   const [slidesCount, setSlidesCount] = useState(0);
-  const [htmlDeckUrl, setHtmlDeckUrl] = useState(null);
   const [pdfProgress, setPdfProgress] = useState(null);
 
-  const [voMode, setVoMode] = useState('upload');     // 'upload' | 'tts'
   const [voFiles, setVoFiles] = useState([]);         // [{name,url,file}]
   const [bgmFile, setBgmFile] = useState(null);
   const [bgmPreviewing, setBgmPreviewing] = useState(false);
   const [voLoadedTick, setVoLoadedTick] = useState(0);
   const [transcript, setTranscript] = useState(null); // parsed result
   const [transcriptName, setTranscriptName] = useState('');
-
-  // TTS state
-  const [ttsVoices, setTtsVoices] = useState([]);
-  const [ttsVoiceURI, setTtsVoiceURI] = useState('');
-  const [ttsRate, setTtsRate] = useState(1.0);
-  const [ttsPitch, setTtsPitch] = useState(1.0);
-  const ttsRef = useRef(null);
-  const ttsCtrlRef = useRef(null);
-  if (!ttsRef.current && typeof window.SlidecastTTS !== 'undefined') {
-    ttsRef.current = new SlidecastTTS();
-  }
 
   // ---- State: mapping & timing ----
   const [segments, setSegments] = useState([]);       // [{idx, start, end, slide, cues:[]}]
@@ -200,7 +186,7 @@ function App() {
 
   // ---- Settings ----
   const [showSubs, setShowSubs] = useState(true);
-  const [bgmBase, setBgmBase] = useState(0.18);
+  const [bgmBase, setBgmBase] = useState(0.12);
   const [resolution, setResolution] = useState('1920x1080');
 
   // ---- Intro / Outro ----
@@ -214,7 +200,6 @@ function App() {
   // ---- Project persistence ----
   const [projectId, setProjectId] = useState(null);
   const [projectName, setProjectName] = useState('');
-  const [htmlDeckFile, setHtmlDeckFile] = useState(null); // retain original File for save
   const [savedProjects, setSavedProjects] = useState([]);
   const [showProjectsModal, setShowProjectsModal] = useState(false);
   const [savingProject, setSavingProject] = useState(false);
@@ -236,7 +221,6 @@ function App() {
   const recorderRef = useRef(null);
   const rendererRef = useRef(null);
   const canvasRef = useRef(null);
-  const iframeRef = useRef(null);
   const tickRef = useRef(null);
   const playbackEndResolveRef = useRef(null);
   const recordingAbortedRef = useRef(false);
@@ -265,28 +249,6 @@ function App() {
     } catch {}
   };
 
-  // ---- Load TTS voices ----
-  useEffect(() => {
-    if (!ttsRef.current?.isSupported()) return;
-    ttsRef.current.listChineseVoices().then((vs) => {
-      setTtsVoices(vs);
-      if (vs.length && !ttsVoiceURI) {
-        // prefer zh-TW > zh-HK > zh-CN > first
-        const pref = vs.find(v => /zh-tw/i.test(v.lang)) ||
-                     vs.find(v => /zh-hk/i.test(v.lang)) ||
-                     vs.find(v => /zh-cn/i.test(v.lang)) || vs[0];
-        setTtsVoiceURI(pref.voiceURI);
-      }
-    });
-  }, []);
-
-  // ---- Apply TTS options ----
-  useEffect(() => {
-    if (!ttsRef.current) return;
-    const v = ttsVoices.find(x => x.voiceURI === ttsVoiceURI) || null;
-    ttsRef.current.setOptions({ voice: v, rate: ttsRate, pitch: ttsPitch });
-  }, [ttsVoices, ttsVoiceURI, ttsRate, ttsPitch]);
-
   // ---- Initialize renderer when canvas mounts ----
   useEffect(() => {
     if (canvasRef.current && !rendererRef.current) {
@@ -306,7 +268,6 @@ function App() {
       setSlideUrls(frames);
       setSlidesCount(frames.length);
       setSlidesMode('pdf');
-      setHtmlDeckUrl(null);
       await rendererRef.current.loadImages(frames);
       rendererRef.current.mode = 'images';
       toast.push(`已載入 ${frames.length} 張投影片`, 'ok');
@@ -324,22 +285,9 @@ function App() {
     setSlideUrls(urls);
     setSlidesCount(urls.length);
     setSlidesMode('images');
-    setHtmlDeckUrl(null);
     await rendererRef.current.loadImages(urls);
     rendererRef.current.mode = 'images';
     toast.push(`已載入 ${urls.length} 張圖片`, 'ok');
-  };
-
-  const onSlidesHtml = (files) => {
-    const file = files[0];
-    if (htmlDeckUrl) URL.revokeObjectURL(htmlDeckUrl);
-    const url = htmlFileToUrl(file);
-    setHtmlDeckUrl(url);
-    setHtmlDeckFile(file);
-    setSlidesMode('html');
-    setSlideUrls([]);
-    rendererRef.current.mode = 'iframe';
-    toast.push('HTML deck 已載入', 'ok');
   };
 
   const onVoiceover = async (files) => {
@@ -455,27 +403,10 @@ function App() {
   // ---- Compute segments when VO + transcript change ----
   useEffect(() => {
     let segs = [];
-    if (voMode === 'upload') {
-      if (!audioRef.current.voSegments?.length) { setSegments([]); return; }
-      segs = audioRef.current.voSegments.map(s => ({
-        idx: s.idx, start: s.start, end: s.end, slide: s.idx, cues: [],
-      }));
-    } else if (voMode === 'tts') {
-      // TTS mode: derive segments from transcript lines
-      let lines = [];
-      if (transcript?.kind === 'per-slide' && transcript.perSlideCues) {
-        lines = transcript.perSlideCues.map(e => e.text || (e.cues || []).join(''));
-      } else if (transcript?.kind === 'timed' && transcript.flatCues) {
-        lines = transcript.flatCues.map(c => c.text);
-      }
-      lines = lines.filter(l => l && l.trim());
-      if (!lines.length || !ttsRef.current) { setSegments([]); setTotalDuration(0); return; }
-      const baked = ttsRef.current.bakeEstimate(lines);
-      segs = baked.segments.map(s => ({
-        idx: s.idx, start: s.start, end: s.end, slide: s.idx, cues: [], text: s.text,
-      }));
-      setTotalDuration(baked.totalMs / 1000);
-    }
+    if (!audioRef.current.voSegments?.length) { setSegments([]); return; }
+    segs = audioRef.current.voSegments.map(s => ({
+      idx: s.idx, start: s.start, end: s.end, slide: s.idx, cues: [],
+    }));
 
     if (transcript?.kind === 'per-slide' && transcript.perSlideCues) {
       for (const e of transcript.perSlideCues) {
@@ -491,18 +422,14 @@ function App() {
       }
     }
     setSegments(segs);
-  }, [voMode, voFiles, voLoadedTick, transcript, ttsRate, ttsVoiceURI]);
+  }, [voFiles, voLoadedTick, transcript]);
 
-  // ---- Also assign slide mapping ----
-  // If transcript is per-slide and slides count > seg count, extend segments
-  // (rare); otherwise default 1:1.
-  const playableSlideCount = slidesMode === 'html' ? null : slidesCount;
   const segCount = segments.length;
-  const mismatch = playableSlideCount !== null && segCount > 0 && playableSlideCount !== segCount;
+  const mismatch = segCount > 0 && slidesCount > 0 && slidesCount !== segCount;
 
-  // ---- Playback tick (file mode only; TTS uses its own onTick) ----
+  // ---- Playback tick ----
   useEffect(() => {
-    if (!playing || voMode === 'tts') {
+    if (!playing) {
       if (tickRef.current) cancelAnimationFrame(tickRef.current);
       return;
     }
@@ -561,111 +488,20 @@ function App() {
     audioRef.current.setBgmLevels({ base: bgmBase });
   }, [bgmBase]);
 
-  // ---- iframe attach when html deck ----
-  useEffect(() => {
-    if (slidesMode === 'html' && iframeRef.current) {
-      const onload = () => rendererRef.current.attachIframe(iframeRef.current);
-      iframeRef.current.addEventListener('load', onload);
-      return () => iframeRef.current?.removeEventListener('load', onload);
-    }
-  }, [slidesMode, htmlDeckUrl]);
-
-  // ---- Probe HTML deck slide count ----
-  useEffect(() => {
-    if (slidesMode !== 'html' || !iframeRef.current) return;
-    const tryProbe = () => {
-      try {
-        const doc = iframeRef.current.contentDocument;
-        const stage = doc?.querySelector('deck-stage');
-        if (stage) {
-          // count direct child <section> or use stage._slides if present
-          const n = stage.querySelectorAll(':scope > section').length;
-          if (n > 0) setSlidesCount(n);
-        } else {
-          // fallback: count [data-screen-label] elements
-          const n = doc?.querySelectorAll('[data-screen-label]').length || 0;
-          if (n > 0) setSlidesCount(n);
-        }
-      } catch {}
-    };
-    const t = setTimeout(tryProbe, 800);
-    return () => clearTimeout(t);
-  }, [slidesMode, htmlDeckUrl]);
-
   // ---- Controls ----
   const handlePlay = () => {
     if (!segments.length) { toast.push('需要至少一段配音', 'warn'); return; }
     // Stop standalone BGM preview if running — playback flows manage BGM themselves
     if (bgmPreviewing) { audioRef.current.stopBgmOnly(); setBgmPreviewing(false); }
-    if (voMode === 'tts') {
-      // Live TTS playback — BGM runs in parallel since play() isn't called
-      if (bgmFile) audioRef.current.playBgmOnly();
-      const lines = segments.map(s => s.text || '');
-      // Cancel any prior playback
-      ttsCtrlRef.current?.cancel();
-      let segStartedAt = 0;
-      let curIdx = 0;
-      ttsCtrlRef.current = ttsRef.current.startLivePlayback({
-        lines,
-        onSegmentStart: (idx) => {
-          curIdx = idx;
-          segStartedAt = performance.now();
-          setCurrentSlide(idx);
-          rendererRef.current.setSlide(idx);
-        },
-        onSegmentEnd: () => {},
-        onTick: (totalSec, idx) => {
-          setTime(totalSec);
-          // distribute cues within current segment
-          const seg = segments[idx];
-          if (!seg) return;
-          let cueText = '';
-          if (seg.cues.length) {
-            if (typeof seg.cues[0] === 'string') {
-              const elapsed = (performance.now() - segStartedAt) / 1000;
-              const dur = Math.max(0.1, seg.end - seg.start);
-              const ci = Math.min(seg.cues.length - 1,
-                Math.floor(elapsed / (dur / seg.cues.length)));
-              cueText = seg.cues[ci];
-            }
-          } else if (seg.text) {
-            cueText = seg.text;
-          }
-          if (cueText !== currentCue) {
-            setCurrentCue(cueText);
-            rendererRef.current.setSubtitle(showSubs ? cueText : '');
-          }
-        },
-        onAllDone: () => {
-          setPlaying(false);
-          ttsCtrlRef.current = null;
-          audioRef.current.stopBgmOnly();
-        },
-      });
-      setPlaying(true);
-      return;
-    }
     audioRef.current.play(time);
     setPlaying(true);
   };
   const handlePause = () => {
-    if (voMode === 'tts') {
-      ttsCtrlRef.current?.cancel();
-      ttsCtrlRef.current = null;
-      audioRef.current.stopBgmOnly();
-      setPlaying(false);
-      return;
-    }
     audioRef.current.stop();
     setPlaying(false);
   };
   const handleStop = () => {
-    if (voMode === 'tts') {
-      ttsCtrlRef.current?.cancel();
-      ttsCtrlRef.current = null;
-    } else {
-      audioRef.current.stop();
-    }
+    audioRef.current.stop();
     audioRef.current.stopBgmOnly();
     setPlaying(false);
     setTime(0);
@@ -678,19 +514,6 @@ function App() {
     if (r) { playbackEndResolveRef.current = null; r(); }
   };
   const handleSeek = (t) => {
-    if (voMode === 'tts') {
-      // TTS cannot seek mid-utterance reliably; jump to nearest segment start
-      ttsCtrlRef.current?.cancel();
-      ttsCtrlRef.current = null;
-      const seg = segments.find(s => t >= s.start && t < s.end) || segments[0];
-      if (seg) {
-        setTime(seg.start);
-        setCurrentSlide(seg.slide);
-        rendererRef.current.setSlide(seg.slide);
-      }
-      setPlaying(false);
-      return;
-    }
     const wasPlaying = playing;
     audioRef.current.stop();
     setTime(t);
@@ -704,7 +527,7 @@ function App() {
     }
   };
 
-  const canRecord = segments.length > 0 && (slidesMode === 'pdf' || slidesMode === 'images') && voMode !== 'tts';
+  const canRecord = segments.length > 0 && (slidesMode === 'pdf' || slidesMode === 'images');
   const startRecording = async () => {
     if (!canRecord) {
       toast.push('錄製目前僅支援 PDF / 圖片來源', 'warn');
@@ -830,11 +653,9 @@ function App() {
     return buildSnapshot({
       projectName,
       slidesMode, slideUrls,
-      htmlDeckUrl, htmlDeckFile,
-      voMode, voFiles,
+      voFiles,
       bgmFile,
       transcript, transcriptName,
-      ttsVoiceURI, ttsRate, ttsPitch,
       segments,
       showSubs, bgmBase, resolution,
       introFile, introType, introDuration,
@@ -896,7 +717,6 @@ function App() {
       // Free old URLs first
       slideUrls.forEach(u => u.startsWith('blob:') && URL.revokeObjectURL(u));
       voFiles.forEach(v => v.url?.startsWith('blob:') && URL.revokeObjectURL(v.url));
-      if (htmlDeckUrl) URL.revokeObjectURL(htmlDeckUrl);
 
       const p = r.payload;
       setProjectId(r.id);
@@ -904,19 +724,13 @@ function App() {
       setSlidesMode(p.slidesMode);
       setSlideUrls(r.slideUrls);
       setSlidesCount(r.slidesCount);
-      setHtmlDeckUrl(r.htmlDeckUrl);
-      setHtmlDeckFile(r.htmlDeckFile);
-      setVoMode(p.voMode || 'upload');
       setVoFiles(r.voFiles);
       setBgmFile(r.bgmFile);
       setTranscript(p.transcript);
       setTranscriptName(p.transcriptName || '');
-      setTtsVoiceURI(p.ttsVoiceURI || '');
-      setTtsRate(p.ttsRate ?? 1.0);
-      setTtsPitch(p.ttsPitch ?? 1.0);
       setSegments(p.segments || []);
       setShowSubs(!!p.showSubs);
-      setBgmBase(p.bgmBase ?? 0.18);
+      setBgmBase(p.bgmBase ?? 0.12);
       setResolution(p.resolution || '1920x1080');
       setIntroFile(r.introFile || null);
       setIntroType(r.introFile ? (r.introFile.type.startsWith('video/') ? 'video' : 'image') : null);
@@ -926,11 +740,9 @@ function App() {
       setOutroDuration(p.outroDuration ?? 3);
 
       // Tell renderer/audio engines what to use
-      if (r.slidesMode === 'pdf' || p.slidesMode === 'pdf' || p.slidesMode === 'images') {
+      if (p.slidesMode === 'pdf' || p.slidesMode === 'images') {
         rendererRef.current.mode = 'images';
         if (r.slideUrls.length) await rendererRef.current.loadImages(r.slideUrls);
-      } else if (p.slidesMode === 'html') {
-        rendererRef.current.mode = 'iframe';
       }
       if (r.voFiles.length) {
         try {
@@ -957,14 +769,11 @@ function App() {
     // free URLs
     slideUrls.forEach(u => u.startsWith('blob:') && URL.revokeObjectURL(u));
     voFiles.forEach(v => v.url?.startsWith('blob:') && URL.revokeObjectURL(v.url));
-    if (htmlDeckUrl) URL.revokeObjectURL(htmlDeckUrl);
     setProjectId(null);
     setProjectName('');
     setSlidesMode(null);
     setSlideUrls([]);
     setSlidesCount(0);
-    setHtmlDeckUrl(null);
-    setHtmlDeckFile(null);
     setVoFiles([]);
     setBgmFile(null);
     setTranscript(null);
@@ -1006,10 +815,9 @@ function App() {
     // eslint-disable-next-line
   }, [
     autoSaveOn, projectId,
-    slidesMode, slideUrls, htmlDeckUrl,
-    voMode, voFiles, bgmFile,
+    slidesMode, slideUrls,
+    voFiles, bgmFile,
     transcript, transcriptName,
-    ttsVoiceURI, ttsRate, ttsPitch,
     segments, showSubs, bgmBase, resolution,
     introFile, introType, introDuration,
     outroFile, outroType, outroDuration,
@@ -1171,7 +979,7 @@ function App() {
         borderRight: `1px solid ${SC_COLORS.border}`, background: SC_COLORS.bg2,
         padding: 20, overflowY: 'auto', minHeight: 0,
       }}>
-        <Section n={1} title="投影片來源" subtitle="PDF / 圖片 / HTML deck">
+        <Section n={1} title="投影片來源" subtitle="PDF / 圖片">
           <div style={{ display: 'grid', gap: 8 }}>
             <DropZone
               label="上傳 PDF"
@@ -1194,113 +1002,17 @@ function App() {
               value={slidesMode === 'images' ? `${slidesCount} 張` : null}
               dense
             />
-            <DropZone
-              label="上傳 HTML deck"
-              hint="支援 deck-stage / 含 data-screen-label"
-              accept=".html,.htm"
-              onFiles={onSlidesHtml}
-              value={slidesMode === 'html' ? '已載入' : null}
-              dense
-            />
           </div>
         </Section>
 
         <Section n={2} title="配音" subtitle="每段對應一張投影片">
-          {/* Mode tabs */}
-          <div style={{
-            display: 'flex', background: SC_COLORS.bg, borderRadius: 8,
-            padding: 3, marginBottom: 10, border: `1px solid ${SC_COLORS.border}`,
-          }}>
-            {[
-              { id: 'upload', label: '上傳音檔' },
-              { id: 'tts', label: '瀏覽器 TTS' },
-            ].map(t => (
-              <button key={t.id} onClick={() => setVoMode(t.id)}
-                style={{
-                  flex: 1, padding: '7px 10px', borderRadius: 6,
-                  border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
-                  fontFamily: 'inherit',
-                  background: voMode === t.id ? SC_COLORS.panel2 : 'transparent',
-                  color: voMode === t.id ? SC_COLORS.text : SC_COLORS.textDim,
-                  transition: 'all .12s',
-                }}>
-                {t.label}
-              </button>
-            ))}
-          </div>
-
-          {voMode === 'upload' && (
-            <DropZone
-              label="上傳配音 (多段)"
-              hint="MP3/WAV/M4A；依檔名排序串接"
-              accept="audio/*" multiple
-              onFiles={onVoiceover}
-              value={voFiles.length ? `${voFiles.length} 段 / ${fmtTime(totalDuration)}` : null}
-            />
-          )}
-
-          {voMode === 'tts' && (
-            <div style={{
-              background: SC_COLORS.panel2, border: `1px solid ${SC_COLORS.border}`,
-              borderRadius: 10, padding: 14,
-            }}>
-              {!ttsRef.current?.isSupported() ? (
-                <div style={{ fontSize: 12, color: SC_COLORS.err }}>
-                  此瀏覽器不支援 SpeechSynthesis API
-                </div>
-              ) : (
-                <>
-                  <div style={{ fontSize: 11, color: SC_COLORS.textDim, marginBottom: 10, lineHeight: 1.5 }}>
-                    用第 3 區的字幕檔當作旁白稿；播放時瀏覽器會即時朗讀。
-                  </div>
-                  <div style={{ marginBottom: 10 }}>
-                    <div style={{ fontSize: 11, color: SC_COLORS.textDim, marginBottom: 4 }}>語音</div>
-                    <select value={ttsVoiceURI} onChange={e => setTtsVoiceURI(e.target.value)}
-                      style={{
-                        width: '100%', padding: '7px 9px', borderRadius: 6,
-                        background: SC_COLORS.bg, color: SC_COLORS.text,
-                        border: `1px solid ${SC_COLORS.border}`, fontSize: 12,
-                        fontFamily: 'inherit',
-                      }}>
-                      {ttsVoices.length === 0 && <option value="">（載入中…若清單空白請刷新）</option>}
-                      {ttsVoices.map(v => (
-                        <option key={v.voiceURI} value={v.voiceURI}>
-                          {v.name} ({v.lang}){v.localService ? '' : ' · 雲端'}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                    <div>
-                      <div style={{ fontSize: 11, color: SC_COLORS.textDim, marginBottom: 4 }}>
-                        語速 {ttsRate.toFixed(2)}×
-                      </div>
-                      <input type="range" min={0.5} max={2.0} step={0.05} value={ttsRate}
-                        onChange={e => setTtsRate(+e.target.value)}
-                        style={{ width: '100%' }} />
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 11, color: SC_COLORS.textDim, marginBottom: 4 }}>
-                        音調 {ttsPitch.toFixed(2)}
-                      </div>
-                      <input type="range" min={0.5} max={1.5} step={0.05} value={ttsPitch}
-                        onChange={e => setTtsPitch(+e.target.value)}
-                        style={{ width: '100%' }} />
-                    </div>
-                  </div>
-                  <div style={{
-                    fontSize: 11, color: SC_COLORS.textDim, marginTop: 10,
-                    padding: 8, background: SC_COLORS.bg, borderRadius: 6,
-                    border: `1px solid ${SC_COLORS.border}`, lineHeight: 1.5,
-                  }}>
-                    {transcript
-                      ? <>已偵測到字幕，TTS 會逐段朗讀。</>
-                      : <>請先在第 3 區上傳字幕／旁白稿。</>}
-                  </div>
-                </>
-              )}
-            </div>
-          )}
+          <DropZone
+            label="上傳配音 (多段)"
+            hint="MP3/WAV/M4A；依檔名排序串接"
+            accept="audio/*" multiple
+            onFiles={onVoiceover}
+            value={voFiles.length ? `${voFiles.length} 段 / ${fmtTime(totalDuration)}` : null}
+          />
         </Section>
 
         <Section n={3} title="字幕 / 旁白稿" subtitle="可選">
@@ -1441,27 +1153,13 @@ function App() {
               width: '100%', height: '100%', position: 'relative',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
             }}>
-              {/* iframe layer for HTML deck */}
-              {slidesMode === 'html' && htmlDeckUrl && (
-                <iframe
-                  ref={iframeRef}
-                  src={htmlDeckUrl}
-                  style={{
-                    position: 'absolute',
-                    width: '100%', height: '100%',
-                    border: 'none', background: '#000',
-                  }}
-                />
-              )}
-              {/* Canvas overlay (always present; drawn either as full image or transparent w/ subtitles) */}
               <canvas
                 ref={canvasRef}
                 width={1920}
                 height={1080}
                 style={{
                   width: '100%', height: '100%', objectFit: 'contain',
-                  position: 'relative', pointerEvents: 'none',
-                  background: slidesMode === 'html' ? 'transparent' : '#000',
+                  position: 'relative', pointerEvents: 'none', background: '#000',
                 }}
               />
               {!slidesMode && (
@@ -1621,28 +1319,6 @@ function App() {
             {currentCue || (segments.length ? '— 即將開始 —' : '尚未載入內容')}
           </div>
 
-          {!canRecord && segments.length > 0 && slidesMode === 'html' && (
-            <div style={{
-              marginTop: 10, fontSize: 11, color: SC_COLORS.warn,
-              padding: '8px 10px', borderRadius: 6,
-              background: 'rgba(240,184,96,0.08)',
-              border: `1px solid rgba(240,184,96,0.25)`,
-            }}>
-              HTML deck 模式無法直接錄製成影片（瀏覽器安全限制）。請改用 PDF / 圖片來源，或使用螢幕錄製工具錄整個視窗。
-            </div>
-          )}
-
-          {voMode === 'tts' && segments.length > 0 && (
-            <div style={{
-              marginTop: 10, fontSize: 11, color: SC_COLORS.warn,
-              padding: '8px 10px', borderRadius: 6,
-              background: 'rgba(240,184,96,0.08)',
-              border: `1px solid rgba(240,184,96,0.25)`,
-              lineHeight: 1.5,
-            }}>
-              ⚠ TTS 模式僅供即時預覽。瀏覽器安全限制使 SpeechSynthesis 無法被錄進影片裡，要輸出影片請改用「上傳音檔」（可先用 TTS 試聽稿子，再離線生成正式配音檔），或用作業系統內建的螢幕錄製工具錄整個視窗。
-            </div>
-          )}
         </div>
       </main>
 

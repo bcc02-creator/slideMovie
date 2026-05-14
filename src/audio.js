@@ -11,7 +11,7 @@ export class SlidecastAudio {
     this.recordDest = null;   // MediaStreamDestination for recording
     this.voGain = null;
     this.bgmGain = null;
-    this.bgmBaseLevel = 0.18; // BGM volume relative to VO
+    this.bgmBaseLevel = 0.12; // BGM volume relative to VO
     this.bgmDuckLevel = 0.06;
     this.bgmSource = null;
     this.bgmBuffer = null;

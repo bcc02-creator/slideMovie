@@ -139,10 +139,6 @@ export function imageFilesToUrls(files) {
   return sorted.map(f => URL.createObjectURL(f));
 }
 
-export function htmlFileToUrl(file) {
-  return URL.createObjectURL(file);
-}
-
 export function audioFilesToList(files) {
   const sorted = [...files].sort((a, b) => a.name.localeCompare(b.name, 'en', { numeric: true }));
   return sorted.map(f => ({ name: f.name, url: URL.createObjectURL(f), file: f }));

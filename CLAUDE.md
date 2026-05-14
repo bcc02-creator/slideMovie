@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 專案概述
 
-**Slidecast** 是一個純前端瀏覽器應用，把投影片（PDF / 圖片 / HTML deck）+ 配音 + 字幕組合成可下載的影片。  
+**Slidecast** 是一個純前端瀏覽器應用，把投影片（PDF / 圖片）+ 配音 + 字幕組合成可下載的影片。  
 不需要後端伺服器；所有運算都在瀏覽器內完成。
 
 ## 技術棧
@@ -15,7 +15,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | 打包工具 | Vite 5 |
 | 投影片解析 | pdf.js 3.11 (CDN worker) |
 | 影片轉檔 | ffmpeg.wasm 0.11.x |
-| 語音合成 | Web Speech API (SpeechSynthesis) |
 | 音訊 | Web Audio API |
 | 錄製 | MediaRecorder API |
 | 持久化 | IndexedDB（瀏覽器本機）|
@@ -39,9 +38,8 @@ src/
 ├── main.jsx       # ReactDOM 入口
 ├── app.jsx        # 主應用 component（所有 UI + 狀態）
 ├── audio.js       # SlidecastAudio（Web Audio 引擎）、SlidecastRecorder（MediaRecorder）
-├── tts.js         # SlidecastTTS（Web Speech API 包裝）
 ├── ffmpeg.js      # SlidecastFFmpeg（ffmpeg.wasm WebM→MP4）
-├── renderer.js    # SlidecastRenderer（Canvas 渲染器，支援 images / iframe 兩種模式）
+├── renderer.js    # SlidecastRenderer（Canvas 渲染器，images 模式）
 ├── parsers.js     # PDF 解析、字幕解析（SRT/VTT/JSON/純文字）、工具函式
 ├── persist.js     # buildSnapshot / rehydrateProject（IndexedDB 存取序列化）
 └── db.js          # SlidecastDB（IndexedDB CRUD）
@@ -51,16 +49,15 @@ src/
 
 - **`app.jsx` 是單體**：所有狀態都在這裡，子元件（`DropZone`、`Section`、`Btn`）與 hook（`useToast`）定義在同一個檔案內。不要把狀態分散到獨立 context 或 store，維持現有扁平結構。
 - **樣式 token**：所有顏色從 `SC_COLORS` 物件取用，寫在 `app.jsx` 頂部。新增 UI 一律引用這個物件，不要硬編碼色碼。
-- **Renderer 模式**：`SlidecastRenderer` 有兩個模式：`'images'`（Canvas 繪製）和 `'iframe'`（HTML deck）。Canvas 在兩種模式都存在，iframe 模式下 Canvas 背景透明、只渲染字幕疊層。
+- **Renderer 模式**：`SlidecastRenderer` 只有 `'images'` 模式（Canvas 繪製）；`slidesMode` 只有 `'pdf'` 和 `'images'` 兩種值。
 - **無 TypeScript**：所有檔案都是 `.js` / `.jsx`，不引入型別宣告。
 
 ### 主要狀態分組（app.jsx）
 
 | 群組 | 主要 state | 說明 |
 |------|-----------|------|
-| 投影片 | `slidesMode`, `slideUrls`, `slidesCount`, `htmlDeckUrl` | `slidesMode`: `'pdf'` \| `'images'` \| `'html'` |
-| 配音 | `voMode`, `voFiles`, `totalDuration` | `voMode`: `'upload'` \| `'tts'` |
-| TTS | `ttsVoiceURI`, `ttsRate`, `ttsPitch`, `ttsVoices` | 透過 `SlidecastTTS` 驅動 |
+| 投影片 | `slidesMode`, `slideUrls`, `slidesCount` | `slidesMode`: `'pdf'` \| `'images'` |
+| 配音 | `voFiles`, `totalDuration` | 上傳 MP3/WAV/M4A 音檔 |
 | 背景音樂 | `bgmFile`, `bgmBase`, `bgmPreviewing` | `bgmBase` 預設 0.18，ducking 時降至 0.06 |
 | 字幕 | `transcript`, `transcriptName`, `segments` | `segments`: `[{idx,start,end,slide,cues}]` |
 | 片頭／片尾 | `introFile`, `introType`, `introDuration`, `outroFile`, `outroType`, `outroDuration` | `type`: `'image'` \| `'video'` |
@@ -114,7 +111,7 @@ DB 名稱 `slidecast`，版本 1，兩個 object store：
 | Store | keyPath | Indices | 說明 |
 |-------|---------|---------|------|
 | `projects` | `id` | `updatedAt` | 儲存 payload（不含 Blob）|
-| `blobs` | `id`（autoIncrement）| `projectId`, `projectRole` | `role` ∈ `'slide'\|'vo'\|'bgm'\|'html'\|'intro'\|'outro'` |
+| `blobs` | `id`（autoIncrement）| `projectId`, `projectRole` | `role` ∈ `'slide'\|'vo'\|'bgm'\|'intro'\|'outro'` |
 
 `SlidecastDB` 公開 API：`listProjects`, `saveProject`, `loadProject`, `deleteProject`, `renameProject`, `getStorageEstimate`。
 
@@ -132,8 +129,7 @@ Cross-Origin-Embedder-Policy: require-corp
 - **其他平台**：Netlify / Cloudflare Pages 需另外設定 `_headers` 或 `netlify.toml`。
 
 ### 錄製限制
-- 錄製（`SlidecastRecorder`）**只支援 PDF / 圖片**來源，HTML deck 因瀏覽器安全限制無法錄製。
-- TTS 模式（Web Speech API）因瀏覽器限制**無法被 MediaRecorder 捕捉**，只能即時預覽。
+- 錄製（`SlidecastRecorder`）**只支援 PDF / 圖片**來源。
 - 片頭／片尾影片的音訊透過 `connectMediaElement()` 路由進 Web Audio，才能被 MediaRecorder 捕捉。
 
 ### 資料儲存
