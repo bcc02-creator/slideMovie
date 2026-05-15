@@ -230,6 +230,7 @@ function App() {
   const tickRef = useRef(null);
   const playbackEndResolveRef = useRef(null);
   const recordingAbortedRef = useRef(false);
+  const segTimersRef = useRef([]);
 
   if (!audioRef.current) audioRef.current = new SlidecastAudio();
 
@@ -270,12 +271,14 @@ function App() {
     setPdfProgress({ done: 0, total: 0 });
     try {
       const frames = await renderPdfToFrames(file, (d, t) => setPdfProgress({ done: d, total: t }));
+      await rendererRef.current.loadImages(frames);
       slideUrls.forEach(u => u.startsWith('blob:') && URL.revokeObjectURL(u));
       setSlideUrls(frames);
       setSlidesCount(frames.length);
       setSlidesMode('pdf');
-      await rendererRef.current.loadImages(frames);
       rendererRef.current.mode = 'images';
+      rendererRef.current.setSlide(0);
+      setCurrentSlide(0);
       toast.push(`已載入 ${frames.length} 張投影片`, 'ok');
     } catch (e) {
       console.error(e);
@@ -287,13 +290,23 @@ function App() {
 
   const onSlidesImages = async (files) => {
     const urls = imageFilesToUrls(files);
-    slideUrls.forEach(u => u.startsWith('blob:') && URL.revokeObjectURL(u));
-    setSlideUrls(urls);
-    setSlidesCount(urls.length);
-    setSlidesMode('images');
-    await rendererRef.current.loadImages(urls);
-    rendererRef.current.mode = 'images';
-    toast.push(`已載入 ${urls.length} 張圖片`, 'ok');
+    try {
+      await rendererRef.current.loadImages(urls);
+      // Revoke old blob URLs only after new images are fully loaded,
+      // so the renderer never draws from an already-revoked URL mid-transition.
+      slideUrls.forEach(u => u.startsWith('blob:') && URL.revokeObjectURL(u));
+      setSlideUrls(urls);
+      setSlidesCount(urls.length);
+      setSlidesMode('images');
+      rendererRef.current.mode = 'images';
+      rendererRef.current.setSlide(0);
+      setCurrentSlide(0);
+      toast.push(`已載入 ${urls.length} 張圖片`, 'ok');
+    } catch (e) {
+      console.error(e);
+      urls.forEach(u => URL.revokeObjectURL(u));
+      toast.push('圖片載入失敗：' + e.message, 'err');
+    }
   };
 
   const onVoiceover = async (files) => {
@@ -576,7 +589,35 @@ function App() {
         if (!recordingAbortedRef.current) {
           handlePlay();
           toast.push('開始錄製，自動從頭播放', 'ok');
-          await mainDone;
+
+          // Schedule slide changes with setTimeout so they work even in background tabs
+          // (requestAnimationFrame is throttled when the tab is not visible)
+          segTimersRef.current = [];
+          const audio = audioRef.current;
+          if (segments.length > 1 && audio.ctx && audio.startedAtCtxTime) {
+            const baseMs = (audio.startedAtCtxTime - audio.ctx.currentTime) * 1000;
+            for (let i = 1; i < segments.length; i++) {
+              const delayMs = baseMs + segments[i].start * 1000;
+              const slideIdx = segments[i].slide;
+              const id = setTimeout(() => {
+                if (!recordingAbortedRef.current) rendererRef.current.setSlide(slideIdx);
+              }, Math.max(0, delayMs));
+              segTimersRef.current.push(id);
+            }
+          }
+
+          // Fallback: auto-end recording if the rAF tick is throttled (background tab)
+          const fallbackEnd = new Promise(r => setTimeout(r, (totalDuration + 5) * 1000));
+          await Promise.race([mainDone, fallbackEnd]);
+
+          segTimersRef.current.forEach(id => clearTimeout(id));
+          segTimersRef.current = [];
+          // Ensure audio is stopped if fallback fired instead of the tick's handleStop
+          if (audio.playing) {
+            audio.stop();
+            audio.stopBgmOnly();
+          }
+          if (playbackEndResolveRef.current) playbackEndResolveRef.current = null;
         }
       }
 
@@ -601,6 +642,8 @@ function App() {
       console.error('Recording sequence error:', e);
       rendererRef.current?.clearBumper();
       recordingAbortedRef.current = true;
+      segTimersRef.current.forEach(id => clearTimeout(id));
+      segTimersRef.current = [];
       handleStop();
       try {
         const blob = await recorderRef.current?.stop();
@@ -616,6 +659,8 @@ function App() {
   const stopRecording = async () => {
     if (!recording) return;
     recordingAbortedRef.current = true;
+    segTimersRef.current.forEach(id => clearTimeout(id));
+    segTimersRef.current = [];
     const r = playbackEndResolveRef.current;
     playbackEndResolveRef.current = null;
     rendererRef.current?.clearBumper();

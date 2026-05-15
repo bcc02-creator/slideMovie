@@ -83,7 +83,7 @@ self.onmessage = async ({ data }) => {
             '-c:a', 'aac',
             '-ar', '44100',
             '-b:a', '192k',
-            '-af', 'aresample=async=1:min_hard_comp=0.100000:first_pts=0',
+            '-af', 'asetpts=N/SR/TB',
             '-movflags', '+faststart',
             'out.mp4',
           ]);

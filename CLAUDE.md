@@ -87,6 +87,16 @@ bgmGain ─┘         └──> recordDest (MediaStreamDestination)
 - **video 型**：透過 `connectMediaElement()` 將影片音訊路由進 Web Audio 以被 MediaRecorder 捕捉；播到結束為止。
 - 錄製序列：片頭 → 主體播放 → 片尾 → `stop()`，任何步驟皆可透過 `recordingAbortedRef` 中斷。
 
+### 錄製流程細節
+
+**背景分頁**：`requestAnimationFrame` 在背景分頁（非焦點）會被瀏覽器節流，導致換頁計時失準。現改以 `segTimersRef`（`useRef<number[]>`）存放各段落的 `setTimeout` ID，錄製開始時依 `segments[i].start * 1000` 排程 `rendererRef.current.setSlide(slideIdx)`，確保換頁時間不受 rAF 節流影響。另用 `Promise.race([mainDone, fallbackEnd])` 加保底計時（`totalDuration + 5` 秒），防止 rAF 完全凍結時錄製卡死。`stopRecording` 與錯誤處理皆會 `clearTimeout` 清除所有計時器。
+
+**投影片載入順序**：`onSlidesPdf` 與 `onSlidesImages` 皆先完成 `rendererRef.current.loadImages()` 再呼叫 `URL.revokeObjectURL()` 撤銷舊 blob URL，避免 renderer 在圖片切換瞬間繪製已失效的 URL。載入完成後同步呼叫 `setSlide(0)` / `setCurrentSlide(0)` 重置預覽到第一張。`onSlidesImages` 另包 try/catch，載入失敗時立即撤銷新建的 blob URL 並顯示錯誤提示。
+
+### ffmpeg.wasm 音訊濾鏡
+
+MP4 轉檔使用 `-af asetpts=N/SR/TB` 重算 audio PTS（取代舊的 `aresample=async=1:min_hard_comp=0.100000:first_pts=0`），避免轉出的 MP4 在某些播放器出現音訊偏移。
+
 ### 字幕格式（parsers.js）
 
 支援四種輸入，`parseTranscriptFile()` 依副檔名自動判斷：

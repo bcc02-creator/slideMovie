@@ -51,7 +51,6 @@ export class SlidecastRenderer {
       const im = new Image();
       im.onload = () => res(im);
       im.onerror = rej;
-      im.crossOrigin = 'anonymous';
       im.src = u;
     })));
     this.mode = 'images';
@@ -72,7 +71,7 @@ export class SlidecastRenderer {
     this._rendering = true;
     const tick = () => {
       if (!this._rendering) return;
-      this.draw();
+      try { this.draw(); } catch (e) { console.warn('Renderer draw error:', e); }
       this._raf = requestAnimationFrame(tick);
     };
     tick();
